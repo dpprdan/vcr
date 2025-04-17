@@ -54,8 +54,6 @@ Cassette <- R6::R6Class(
     name = NA,
     #' @field record (character) record mode
     record = "all",
-    #' @field manfile (character) cassette file path
-    manfile = NA,
     #' @field recorded_at (character) date/time recorded at
     recorded_at = NA,
     #' @field serialize_with (character) serializer to use (yaml|json)
@@ -122,21 +120,22 @@ Cassette <- R6::R6Class(
       clean_outdated_http_interactions
     ) {
       self$name <- name
+
       self$root_dir <- vcr_configuration()$dir
+      if (!dir.exists(self$root_dir)) {
+        dir_create(self$root_dir)
+      }
+
       self$serialize_with <- serialize_with %||% vcr_c$serialize_with
-      self$serializer <- serializer_fetch(self$name, ext = self$serialize_with)
+      self$serializer <- serializer_fetch(
+        self$serialize_with,
+        path = self$root_dir,
+        name = self$name
+      )
       if (!missing(record)) {
         self$record <- check_record_mode(record)
       }
-      self$make_dir()
-      ext <- switch(self$serialize_with, yaml = "yml", json = "json")
-      self$manfile <- sprintf(
-        "%s/%s.%s",
-        path.expand(cassette_path()),
-        self$name,
-        ext
-      )
-      if (!file.exists(self$manfile)) cat("\n", file = self$manfile)
+      if (!file.exists(self$file())) cat("\n", file = self$file())
       if (!missing(match_requests_on)) {
         self$match_requests_on <- check_request_matchers(match_requests_on)
       }
@@ -221,31 +220,17 @@ Cassette <- R6::R6Class(
         invisible(lapply(prev, stub_previous_request))
       }
 
-      tmp <- list(
-        self$name,
-        self$record,
-        self$serialize_with,
-        self$match_requests_on,
-        self$allow_playback_repeats,
-        self$preserve_exact_body_bytes
-      )
-      init_opts <- compact(
-        stats::setNames(
-          tmp,
-          c(
-            "name",
-            "record",
-            "serialize_with",
-            "match_requests_on",
-            "allow_playback_repeats",
-            "preserve_exact_body_bytes"
-          )
-        )
-      )
-      self$cassette_opts <- init_opts
+      self$cassette_opts <- compact(list(
+        name = self$name,
+        record = self$record,
+        serialize_with = self$serialize_with,
+        match_requests_on = self$match_requests_on,
+        allow_playback_repeats = self$allow_playback_repeats,
+        preserve_exact_body_bytes = self$preserve_exact_body_bytes
+      ))
       init_opts <- paste(
-        names(init_opts),
-        unname(init_opts),
+        names(self$cassette_opts),
+        unname(self$cassette_opts),
         sep = ": ",
         collapse = ", "
       )
@@ -258,12 +243,7 @@ Cassette <- R6::R6Class(
       self$new_recorded_interactions <- list()
 
       # check on write to disk path
-      if (!is.null(vcr_c$write_disk_path))
-        dir.create(
-          vcr_c$write_disk_path,
-          showWarnings = FALSE,
-          recursive = TRUE
-        )
+      if (!is.null(vcr_c$write_disk_path)) dir_create(vcr_c$write_disk_path)
     },
 
     #' @description print method for `Cassette` objects
@@ -309,7 +289,7 @@ Cassette <- R6::R6Class(
 
     #' @description get the file path for the cassette
     #' @return character
-    file = function() self$manfile,
+    file = function() self$serializer$path,
 
     #' @description is the cassette in recording mode?
     #' @return logical
@@ -464,9 +444,7 @@ Cassette <- R6::R6Class(
     should_remove_matching_existing_interactions = function() {
       self$record == "all"
     },
-    #' @description Get the serializer path
-    #' @return character
-    storage_key = function() self$serializer$path,
+
     #' @description Get character string of entire cassette; bytes is a misnomer
     #' @return character
     raw_cassette_bytes = function() {
@@ -474,16 +452,6 @@ Cassette <- R6::R6Class(
       if (is.null(file)) return("")
       tmp <- readLines(file) %||% ""
       paste0(tmp, collapse = "")
-    },
-
-    #' @description Create the directory that holds the cassettes, if not present
-    #' @return no return; creates a directory recursively, if missing
-    make_dir = function() {
-      dir.create(
-        path.expand(self$root_dir),
-        showWarnings = FALSE,
-        recursive = TRUE
-      )
     },
 
     #' @description get http interactions from the cassette via the serializer
